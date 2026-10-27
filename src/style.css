@@ -233,6 +233,8 @@ code {
   width: min(820px, calc(100vw - 32px));
   left: 50%;
   right: auto;
+  bottom: auto;
+  max-height: calc(100vh - 32px);
   transform: translate(-50%, 16px);
 }
 

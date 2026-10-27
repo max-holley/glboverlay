@@ -1,5 +1,4 @@
 import './style.css';
-import { Clock } from 'three';
 import { MAX_BYTES, ModelError, ModelLoader, WARN_BYTES, pickModelFiles, totalSize, type LoadedModel } from './loader';
 import { ModelRig } from './rig';
 import {
@@ -367,11 +366,13 @@ async function deleteModel(id: string): Promise<void> {
 
 // ---------------------------------------------------------------- render loop
 
-const clock = new Clock();
+let lastFrame = performance.now();
 
 function frame(): void {
   requestAnimationFrame(frame);
-  const dt = Math.min(clock.getDelta(), 0.1);
+  const nowMs = performance.now();
+  const dt = Math.min((nowMs - lastFrame) / 1000, 0.1);
+  lastFrame = nowMs;
   if (rig && stage && active) {
     rig.update(dt, performance.now() / 1000, tracker.processor.state, global, stage.pose);
   }
@@ -421,5 +422,9 @@ window.addEventListener('keydown', (e) => {
   }
   e.preventDefault();
 });
+
+if (import.meta.env.DEV) {
+  Object.assign(window, { __glb: { tracker, global, getRig: () => rig, getStage: () => stage } });
+}
 
 void init();

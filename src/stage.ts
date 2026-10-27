@@ -124,8 +124,8 @@ export class Stage {
 
     if (avatar) {
       const hy = headY() ?? 0.9;
-      this.visibleH = 0.5;
-      this.targetY = hy - 0.07;
+      this.visibleH = 0.62;
+      this.targetY = hy - 0.1;
     } else {
       this.visibleH = 1.5;
       this.targetY = 0;

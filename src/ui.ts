@@ -64,8 +64,8 @@ class Panel {
     // next frame so the transition runs
     requestAnimationFrame(() => this.el.classList.add('open'));
     this.isOpen = true;
-    const target = this.body.querySelector<HTMLElement>(FOCUSABLE) ?? this.el;
-    target.focus({ preventScroll: true });
+    // Focus the panel itself so global shortcuts keep working; Tab moves into the controls.
+    this.el.focus({ preventScroll: true });
   }
 
   close(): void {
