@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+public/** -text
+*.task binary
+*.vrm binary
+*.glb binary
