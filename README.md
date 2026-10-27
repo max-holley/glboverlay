@@ -18,9 +18,11 @@ Target: **desktop Chrome**. No mobile support.
      `Eye.L`, `LeftEye`, `Eyes`, `Jaw`, `Mouth`) are driven directly, in both modes: eyes turn with your gaze and
      squash to blink, a jaw rotates open, a mouth mesh stretches open and widens with a smile. The detected parts
      are listed under Settings > Current model.
-- Face tracking runs in a Web Worker so inference never blocks rendering (main-thread fallback if workers fail).
-- Frame pacing: tracking at 15 fps and rendering at 30 fps at 1x pixel ratio by default
-  (Settings > Performance; the status line shows both measured rates).
+- **Webcam face screens:** meshes named `FaceEyeL`, `FaceEyeR` and `FaceMouth` show live crops of your own eyes
+  and mouth from the webcam, levelled and soft-masked, so they turn and hide with the model.
+- Frame pacing: a 640x360 camera, 30 fps tracking on the main thread inside the render loop, and 30 fps rendering
+  at 1x pixel ratio by default. The model eases toward each detection every rendered frame, and holds its pose
+  for 2.5 s when your face is briefly lost (Settings > Performance; the status line shows both measured rates).
 - One Euro filtering of pose and blendshapes; face-lost handling (hold briefly, then ease to neutral).
 - Multiple models stored in IndexedDB with thumbnails, rename/delete, per-model calibration, storage usage and `navigator.storage.persist()`.
 - Draco, Meshopt and KTX2 compressed glTF supported. Decoders and the MediaPipe WASM + model are self-hosted: no CDN at runtime.

@@ -1,11 +1,15 @@
 import { Box3, Euler, Matrix4, Object3D, Quaternion, Vector3, type Bone, type Mesh, type SkinnedMesh } from 'three';
 import type { VRM } from '@pixiv/three-vrm';
 import { ARKIT_COUNT, ARKIT_INDEX, ARKIT_MIRROR, ARKIT_NORMALISED, normaliseName } from './arkit';
+import { isFaceScreen } from './facescreens';
 import type { LoadedModel } from './loader';
 import type { GlobalSettings, ModelSettings } from './settings';
 import type { TrackState } from './tracker';
 
-const HOLD_SECONDS = 0.35;
+/** Keep the last pose this long when the face is lost, so brief dropouts don't show. */
+const HOLD_SECONDS = 2.5;
+/** Time constant of the per-render-frame easing toward the latest tracked values. */
+const EASE_SECONDS = 0.045;
 const FADE_OUT_SECONDS = 0.7;
 const FADE_IN_SECONDS = 0.12;
 const NECK_SHARE = 0.35;
@@ -153,6 +157,11 @@ export class ModelRig {
   private dp = new Vector3();
   private v3 = new Vector3();
   private b = new Float32Array(ARKIT_COUNT);
+  // Eased tracking values: updated every rendered frame, so motion stays smooth between detections.
+  private eq = new Quaternion();
+  private ep = new Vector3();
+  private eb = new Float32Array(ARKIT_COUNT);
+  private eased = false;
 
   onNeutralChange: ((n: { q: number[]; p: number[] }) => void) | null = null;
 
@@ -240,7 +249,7 @@ export class ModelRig {
     const joints: [Role, Object3D][] = [];
     const plain: [Role, Object3D][] = [];
     this.model.root.traverse((o) => {
-      if ((o as SkinnedMesh).isSkinnedMesh) return;
+      if ((o as SkinnedMesh).isSkinnedMesh || isFaceScreen(o)) return;
       const role = partRole(o.name);
       if (role) ((o as Bone).isBone ? joints : plain).push([role, o]);
     });
@@ -356,10 +365,23 @@ export class ModelRig {
     const mirror = g.mirror;
     this.updateFrame(pose);
 
+    // ---- ease toward the latest detection ----
+    if (st.valid && !this.eased) {
+      this.eq.copy(st.quat);
+      this.ep.copy(st.pos);
+      this.eb.set(st.blends);
+      this.eased = true;
+    } else if (st.valid) {
+      const ek = 1 - Math.exp(-dt / EASE_SECONDS);
+      this.eq.slerp(st.quat, ek);
+      this.ep.lerp(st.pos, ek);
+      for (let i = 0; i < ARKIT_COUNT; i++) this.eb[i] += (st.blends[i] - this.eb[i]) * ek;
+    }
+
     // ---- pose ----
-    this.d.copy(st.quat).multiply(this.neutralQInv);
+    this.d.copy(this.eq).multiply(this.neutralQInv);
     if (mirror) this.d.set(this.d.x, -this.d.y, -this.d.z, this.d.w);
-    this.dp.copy(st.pos).sub(this.neutralP);
+    this.dp.copy(this.ep).sub(this.neutralP);
     if (mirror) this.dp.x = -this.dp.x;
 
     const sens = g.headSensitivity * w;
@@ -382,7 +404,7 @@ export class ModelRig {
     }
 
     // ---- expression values (mirrored, weighted, intensity-scaled) ----
-    const src = st.blends;
+    const src = this.eb;
     const k = g.expression * w;
     for (let i = 0; i < ARKIT_COUNT; i++) this.b[i] = clamp01(src[mirror ? ARKIT_MIRROR[i] : i] * k);
     const b = this.b;

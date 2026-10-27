@@ -1,7 +1,6 @@
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { Matrix4, Quaternion, Vector3 } from 'three';
-import type { WorkerRequest, WorkerResponse } from './detect.worker';
-import type { FaceFrame } from './landmarker';
+import { createLandmarker, toFrame, type FaceFrame } from './landmarker';
 import { ARKIT_COUNT, ARKIT_INDEX } from './arkit';
 import { OneEuro } from './filters';
 import type { CameraSettings } from './settings';
@@ -118,13 +117,11 @@ export class Tracker {
   onStatus: ((s: TrackerStatus) => void) | null = null;
   onError: ((e: TrackerError) => void) | null = null;
   onDevices: (() => void) | null = null;
+  /** Called after every detection with the raw face (null when no face was found). */
+  onFrame: ((f: FaceFrame | null) => void) | null = null;
 
-  /** Inference runs here when the worker is available; `landmarker` is the main-thread fallback. */
-  private worker: Worker | null = null;
   private landmarker: FaceLandmarker | null = null;
-  private toFrame: ((r: ReturnType<FaceLandmarker['detectForVideo']>) => FaceFrame | null) | null = null;
-  private busy = false;
-  private minInterval = 1000 / 15;
+  private minInterval = 1000 / 30;
   private lastDetect = -1e9;
   private delegate = '';
   private stream: MediaStream | null = null;
@@ -135,86 +132,18 @@ export class Tracker {
   private fpsT = 0;
   private fps = 0;
 
-  constructor(private video: HTMLVideoElement) {
+  constructor(readonly video: HTMLVideoElement) {
     navigator.mediaDevices?.addEventListener('devicechange', () => this.onDevices?.());
   }
 
   private async ensureLandmarker(): Promise<void> {
-    if (this.worker || this.landmarker) return;
-    const wasmBase = BASE + 'mediapipe/wasm';
-    const modelUrl = BASE + 'mediapipe/face_landmarker.task';
+    if (this.landmarker) return;
     try {
-      const { worker, delegate } = await this.startWorker(wasmBase, modelUrl);
-      this.worker = worker;
-      this.delegate = `${delegate}, worker`;
-      return;
-    } catch (e) {
-      console.warn('Tracking worker unavailable, running on the main thread', e);
-    }
-    try {
-      const lm = await import('./landmarker');
-      const r = await lm.createLandmarker(wasmBase, modelUrl, false);
+      const r = await createLandmarker(BASE + 'mediapipe/wasm', BASE + 'mediapipe/face_landmarker.task', false);
       this.landmarker = r.landmarker;
-      this.toFrame = lm.toFrame;
       this.delegate = r.delegate;
     } catch (e) {
       throw new TrackerError('model', `Could not start face tracking: ${(e as Error).message}`);
-    }
-  }
-
-  private startWorker(wasmBase: string, modelUrl: string): Promise<{ worker: Worker; delegate: string }> {
-    return new Promise((resolve, reject) => {
-      let worker: Worker;
-      try {
-        worker = new Worker(new URL('./detect.worker.ts', import.meta.url), { type: 'module' });
-      } catch (e) {
-        reject(e);
-        return;
-      }
-      const fail = (err: unknown) => {
-        worker.terminate();
-        reject(err);
-      };
-      const timer = window.setTimeout(() => fail(new Error('worker init timed out')), 30000);
-      worker.onerror = (e) => {
-        window.clearTimeout(timer);
-        fail(new Error(e.message || 'worker failed to load'));
-      };
-      worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-        const msg = e.data;
-        if (msg.type === 'error') {
-          window.clearTimeout(timer);
-          fail(new Error(msg.message));
-        } else if (msg.type === 'ready') {
-          window.clearTimeout(timer);
-          worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
-          worker.onerror = (ev) => {
-            console.warn('tracking worker error', ev.message);
-            this.busy = false;
-          };
-          resolve({ worker, delegate: msg.delegate });
-        }
-      };
-      worker.postMessage({ type: 'init', wasmBase, modelUrl } satisfies WorkerRequest);
-    });
-  }
-
-  private onWorkerMessage(msg: WorkerResponse): void {
-    if (msg.type !== 'result') return;
-    this.busy = false;
-    if (!this.running) return;
-    this.handleFrame(msg.frame, msg.t);
-  }
-
-  private handleFrame(frame: FaceFrame | null, t: number): void {
-    if (frame) this.processor.process(frame, t / 1000);
-    this.frames++;
-    const now = performance.now();
-    if (now - this.fpsT >= 1000) {
-      this.fps = (this.frames * 1000) / (now - this.fpsT);
-      this.frames = 0;
-      this.fpsT = now;
-      this.emit();
     }
   }
 
@@ -265,7 +194,6 @@ export class Tracker {
     this.fpsT = performance.now();
     this.frames = 0;
     this.emit();
-    this.loop(gen);
   }
 
   stop(): void {
@@ -313,50 +241,32 @@ export class Tracker {
     }
   }
 
-  private loop(gen: number): void {
+  /**
+   * Run one detection if one is due. Called from the render loop, so detection and rendering share
+   * one cadence on the main thread instead of competing for the GPU.
+   */
+  tick(now: number): void {
     const v = this.video;
-    const step = () => {
-      if (gen !== this.gen || !this.running) return;
-      // Drop camera frames while the worker is still busy, so latency never builds up.
-      const t = performance.now();
-      // 3 ms slack so a 30 fps camera reliably yields 15 detections, not 10.
-      if (!this.busy && t - this.lastDetect >= this.minInterval - 3 && v.currentTime !== this.lastVideoTime && v.readyState >= 2) {
-        this.lastVideoTime = v.currentTime;
-        this.lastDetect = t;
-        if (this.worker) {
-          const worker = this.worker;
-          this.busy = true;
-          createImageBitmap(v).then(
-            (image) => {
-              if (gen !== this.gen) {
-                image.close();
-                this.busy = false;
-                return;
-              }
-              worker.postMessage({ type: 'frame', image, t } satisfies WorkerRequest, [image]);
-            },
-            (e) => {
-              console.warn('frame capture failed', e);
-              this.busy = false;
-            },
-          );
-        } else {
-          let frame: FaceFrame | null = null;
-          try {
-            frame = this.toFrame!(this.landmarker!.detectForVideo(v, t));
-          } catch (e) {
-            console.warn('detect failed', e);
-          }
-          this.handleFrame(frame, t);
-        }
-      }
-      schedule();
-    };
-    const schedule = () => {
-      if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(step);
-      else requestAnimationFrame(step);
-    };
-    schedule();
+    if (!this.running || !this.landmarker || v.readyState < 2) return;
+    // 3 ms slack so a 30 fps camera reliably yields 30 detections, not 15.
+    if (now - this.lastDetect < this.minInterval - 3 || v.currentTime === this.lastVideoTime) return;
+    this.lastVideoTime = v.currentTime;
+    this.lastDetect = now;
+    let frame: FaceFrame | null = null;
+    try {
+      frame = toFrame(this.landmarker.detectForVideo(v, now));
+    } catch (e) {
+      console.warn('detect failed', e);
+    }
+    if (frame) this.processor.process(frame, now / 1000);
+    this.onFrame?.(frame);
+    this.frames++;
+    if (now - this.fpsT >= 1000) {
+      this.fps = (this.frames * 1000) / (now - this.fpsT);
+      this.frames = 0;
+      this.fpsT = now;
+      this.emit();
+    }
   }
 
   private emit(): void {

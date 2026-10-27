@@ -370,6 +370,7 @@ export class UI {
     this.camSel = h('select', {});
     this.resSel = h('select', {});
     for (const [w, hh] of [
+      [640, 360],
       [640, 480],
       [1280, 720],
       [1920, 1080],
@@ -506,7 +507,7 @@ export class UI {
   syncSettings(): void {
     const g = this.getGlobal();
     this.resSel.value = `${g.camera.width}x${g.camera.height}`;
-    if (!this.resSel.value) this.resSel.value = '1280x720';
+    if (!this.resSel.value) this.resSel.value = '640x360';
     this.fpsSel.value = String(g.camera.fps);
     this.camSel.value = g.camera.deviceId;
     this.mirror.checked = g.mirror;

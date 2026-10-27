@@ -6,6 +6,8 @@ export interface CameraSettings {
 }
 
 export interface GlobalSettings {
+  /** Bumped when defaults change in a way saved settings should pick up. */
+  version: number;
   smoothing: number;
   expression: number;
   headSensitivity: number;
@@ -36,13 +38,16 @@ export interface ModelSettings {
   neutral?: { q: number[]; p: number[] };
 }
 
+const SETTINGS_VERSION = 2;
+
 export const DEFAULT_GLOBAL: GlobalSettings = {
+  version: SETTINGS_VERSION,
   smoothing: 0.5,
   expression: 1,
   headSensitivity: 1,
   mirror: true,
-  camera: { deviceId: '', width: 1280, height: 720, fps: 30 },
-  trackFps: 15,
+  camera: { deviceId: '', width: 640, height: 360, fps: 30 },
+  trackFps: 30,
   renderFps: 30,
   quality: 1,
 };
@@ -71,6 +76,13 @@ export function loadGlobal(): GlobalSettings {
     if (raw) {
       const p = JSON.parse(raw) as Partial<GlobalSettings>;
       Object.assign(base, p, { camera: { ...base.camera, ...(p.camera ?? {}) } });
+      if ((p.version ?? 1) < SETTINGS_VERSION) {
+        // v2: 640x360 camera and 30 fps tracking replace the old, slower defaults.
+        const d = DEFAULT_GLOBAL;
+        Object.assign(base.camera, { width: d.camera.width, height: d.camera.height, fps: d.camera.fps });
+        base.trackFps = d.trackFps;
+        base.version = SETTINGS_VERSION;
+      }
     }
   } catch {
     /* ignore corrupt or unavailable storage */

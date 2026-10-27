@@ -1,5 +1,6 @@
 import './style.css';
 import { MAX_BYTES, ModelError, ModelLoader, WARN_BYTES, pickModelFiles, totalSize, type LoadedModel } from './loader';
+import { FaceScreens } from './facescreens';
 import { ModelRig } from './rig';
 import {
   DEFAULT_GLOBAL,
@@ -31,6 +32,7 @@ const global: GlobalSettings = loadGlobal();
 let models: ModelMeta[] = [];
 let active: ModelMeta | null = null;
 let rig: ModelRig | null = null;
+let screens: FaceScreens | null = null;
 let loadGen = 0;
 let green = false;
 
@@ -116,6 +118,7 @@ async function init(): Promise<void> {
   ui.showToast('Press I for help');
 
   tracker.onStatus = (s) => ui.setTrackerStatus(s);
+  tracker.onFrame = (f) => screens?.update(f, tracker.video, global.mirror);
   tracker.onDevices = () => void refreshDevices();
   tracker.onError = (e) => showTrackerError(e);
   void refreshDevices();
@@ -203,7 +206,9 @@ function describeMode(): string {
     i.vrm ? 'VRM' : '',
     i.perfectSync ? 'Perfect Sync' : '',
     i.morphTargets ? `${i.morphTargets} ARKit morphs` : 'no ARKit morphs',
-    i.faceParts.length ? `face parts: ${i.faceParts.join(', ')}` : i.vrm ? '' : 'no eye/jaw/mouth nodes found',
+    i.faceParts.length ? `face parts: ${i.faceParts.join(', ')}` : '',
+    screens?.count ? `${screens.count} webcam face screens` : '',
+    !i.vrm && !i.faceParts.length && !screens?.count ? 'no eye/jaw/mouth nodes found' : '',
   ];
   if (rig.mode === 'avatar' && i.detectedMode === 'rigid') bits.push('no head bone found, so nothing will move');
   return bits.filter(Boolean).join(' · ');
@@ -251,7 +256,9 @@ async function presentModel(meta: ModelMeta, files: StoredFile[], fresh: boolean
   }
   rig?.dispose();
   rig = null;
+  screens?.dispose();
   stage!.setModel(model);
+  screens = new FaceScreens(model.root);
   currentModel = model;
   active = meta;
   buildRig(model, meta);
@@ -363,6 +370,8 @@ async function deleteModel(id: string): Promise<void> {
     loadGen++;
     rig?.dispose();
     rig = null;
+    screens?.dispose();
+    screens = null;
     stage?.clearModel();
     currentModel = null;
     active = null;
@@ -383,13 +392,18 @@ async function deleteModel(id: string): Promise<void> {
 // ---------------------------------------------------------------- render loop
 
 let lastFrame = performance.now();
+let nextFrame = 0;
 let renderCount = 0;
 let renderFpsT = performance.now();
 
 function frame(nowMs: number): void {
   requestAnimationFrame(frame);
-  // Frame cap: 1 ms slack keeps a 60 Hz display at an even 30 fps instead of dropping to 20.
-  if (global.renderFps > 0 && nowMs - lastFrame < 1000 / global.renderFps - 1) return;
+  // Frame cap on a fixed schedule: averages the target rate on any refresh rate (60, 75, 144 Hz...).
+  if (global.renderFps > 0) {
+    const interval = 1000 / global.renderFps;
+    if (nowMs < nextFrame - interval * 0.25) return;
+    nextFrame = Math.max(nextFrame + interval, nowMs - interval);
+  }
   const dt = Math.min((nowMs - lastFrame) / 1000, 0.1);
   lastFrame = nowMs;
   renderCount++;
@@ -398,8 +412,11 @@ function frame(nowMs: number): void {
     renderCount = 0;
     renderFpsT = nowMs;
   }
+  // Detection runs here on the main thread, at most once per rendered frame.
+  tracker.tick(nowMs);
+  screens?.tick(dt);
   if (rig && stage && active) {
-    rig.update(dt, performance.now() / 1000, tracker.processor.state, global, stage.pose);
+    rig.update(dt, nowMs / 1000, tracker.processor.state, global, stage.pose);
   }
   stage?.render();
 }
@@ -449,7 +466,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { __glb: { tracker, global, getRig: () => rig, getStage: () => stage } });
+  Object.assign(window, { __glb: { tracker, global, getRig: () => rig, getStage: () => stage, getScreens: () => screens } });
 }
 
 void init();
