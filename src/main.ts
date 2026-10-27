@@ -37,6 +37,13 @@ let green = false;
 const store = new ModelStore();
 const tracker = new Tracker(video);
 tracker.processor.setSmoothing(global.smoothing);
+tracker.setRate(global.trackFps);
+
+/** Push rate / quality settings to the tracker and stage. */
+function applyPerformance(): void {
+  tracker.setRate(global.trackFps);
+  stage?.setQuality(global.quality);
+}
 
 const ui = new UI(
   uiRoot,
@@ -48,6 +55,7 @@ const ui = new UI(
     globalChanged: (restart) => {
       saveGlobal(global);
       tracker.processor.setSmoothing(global.smoothing);
+      applyPerformance();
       if (restart) void startTracking();
     },
     modelSettingsChanged: () => {
@@ -60,6 +68,7 @@ const ui = new UI(
       Object.assign(global, structuredClone(DEFAULT_GLOBAL));
       saveGlobal(global);
       tracker.processor.setSmoothing(global.smoothing);
+      applyPerformance();
       void startTracking();
     },
     resetModel: () => {
@@ -91,6 +100,7 @@ function isChrome(): boolean {
 async function init(): Promise<void> {
   try {
     stage = new Stage(canvas);
+    stage.setQuality(global.quality);
     loader = new ModelLoader(stage.renderer);
   } catch (e) {
     ui.fatal(`WebGL is unavailable or the GPU could not be initialised (${(e as Error).message}). Enable hardware acceleration in chrome://settings/system.`);
@@ -373,12 +383,21 @@ async function deleteModel(id: string): Promise<void> {
 // ---------------------------------------------------------------- render loop
 
 let lastFrame = performance.now();
+let renderCount = 0;
+let renderFpsT = performance.now();
 
-function frame(): void {
+function frame(nowMs: number): void {
   requestAnimationFrame(frame);
-  const nowMs = performance.now();
+  // Frame cap: 1 ms slack keeps a 60 Hz display at an even 30 fps instead of dropping to 20.
+  if (global.renderFps > 0 && nowMs - lastFrame < 1000 / global.renderFps - 1) return;
   const dt = Math.min((nowMs - lastFrame) / 1000, 0.1);
   lastFrame = nowMs;
+  renderCount++;
+  if (nowMs - renderFpsT >= 1000) {
+    ui.setRenderFps((renderCount * 1000) / (nowMs - renderFpsT));
+    renderCount = 0;
+    renderFpsT = nowMs;
+  }
   if (rig && stage && active) {
     rig.update(dt, performance.now() / 1000, tracker.processor.state, global, stage.pose);
   }

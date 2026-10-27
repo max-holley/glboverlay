@@ -124,6 +124,8 @@ export class Tracker {
   private landmarker: FaceLandmarker | null = null;
   private toFrame: ((r: ReturnType<FaceLandmarker['detectForVideo']>) => FaceFrame | null) | null = null;
   private busy = false;
+  private minInterval = 1000 / 15;
+  private lastDetect = -1e9;
   private delegate = '';
   private stream: MediaStream | null = null;
   private running = false;
@@ -272,6 +274,11 @@ export class Tracker {
     this.emit();
   }
 
+  /** Limit face detections per second; camera frames in between are skipped entirely. */
+  setRate(fps: number): void {
+    this.minInterval = 1000 / Math.max(1, fps);
+  }
+
   get isRunning(): boolean {
     return this.running;
   }
@@ -311,9 +318,11 @@ export class Tracker {
     const step = () => {
       if (gen !== this.gen || !this.running) return;
       // Drop camera frames while the worker is still busy, so latency never builds up.
-      if (!this.busy && v.currentTime !== this.lastVideoTime && v.readyState >= 2) {
+      const t = performance.now();
+      // 3 ms slack so a 30 fps camera reliably yields 15 detections, not 10.
+      if (!this.busy && t - this.lastDetect >= this.minInterval - 3 && v.currentTime !== this.lastVideoTime && v.readyState >= 2) {
         this.lastVideoTime = v.currentTime;
-        const t = performance.now();
+        this.lastDetect = t;
         if (this.worker) {
           const worker = this.worker;
           this.busy = true;

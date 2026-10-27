@@ -20,8 +20,8 @@ const FOV = 30;
 /** Cap on rendered pixels: full-window MSAA at 2x DPR on a 4K screen costs far more than it shows in OBS. */
 const MAX_PIXELS = 2560 * 1440;
 
-function pixelRatio(w: number, h: number): number {
-  return Math.max(0.5, Math.min(window.devicePixelRatio, 2, Math.sqrt(MAX_PIXELS / (w * h))));
+function pixelRatio(w: number, h: number, quality: number): number {
+  return Math.max(0.5, Math.min(quality, 2, Math.sqrt(MAX_PIXELS / (w * h))));
 }
 
 /** Renderer, lights, camera and the transform hierarchy that holds the current model. */
@@ -42,6 +42,7 @@ export class Stage {
   private box = new Box3();
   private v = new Vector3();
   private eul = new Euler();
+  private quality = 1;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -76,10 +77,16 @@ export class Stage {
     this.resize();
   }
 
+  setQuality(q: number): void {
+    if (q === this.quality) return;
+    this.quality = q;
+    this.resize();
+  }
+
   resize(): void {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
-    this.renderer.setPixelRatio(pixelRatio(w, h));
+    this.renderer.setPixelRatio(pixelRatio(w, h, this.quality));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.updateCamera();

@@ -19,6 +19,8 @@ Target: **desktop Chrome**. No mobile support.
      squash to blink, a jaw rotates open, a mouth mesh stretches open and widens with a smile. The detected parts
      are listed under Settings > Current model.
 - Face tracking runs in a Web Worker so inference never blocks rendering (main-thread fallback if workers fail).
+- Frame pacing: tracking at 15 fps and rendering at 30 fps at 1x pixel ratio by default
+  (Settings > Performance; the status line shows both measured rates).
 - One Euro filtering of pose and blendshapes; face-lost handling (hold briefly, then ease to neutral).
 - Multiple models stored in IndexedDB with thumbnails, rename/delete, per-model calibration, storage usage and `navigator.storage.persist()`.
 - Draco, Meshopt and KTX2 compressed glTF supported. Decoders and the MediaPipe WASM + model are self-hosted: no CDN at runtime.

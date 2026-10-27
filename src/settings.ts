@@ -11,6 +11,12 @@ export interface GlobalSettings {
   headSensitivity: number;
   mirror: boolean;
   camera: CameraSettings;
+  /** Face detections per second (camera frames in between are skipped). */
+  trackFps: number;
+  /** Rendered frames per second; 0 = every display refresh. */
+  renderFps: number;
+  /** Render pixel ratio (1 = one rendered pixel per CSS pixel). */
+  quality: number;
 }
 
 export type ModelMode = 'auto' | 'avatar' | 'rigid';
@@ -36,6 +42,9 @@ export const DEFAULT_GLOBAL: GlobalSettings = {
   headSensitivity: 1,
   mirror: true,
   camera: { deviceId: '', width: 1280, height: 720, fps: 30 },
+  trackFps: 15,
+  renderFps: 30,
+  quality: 1,
 };
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {

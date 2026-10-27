@@ -141,6 +141,9 @@ export class UI {
   private camSel!: HTMLSelectElement;
   private resSel!: HTMLSelectElement;
   private fpsSel!: HTMLSelectElement;
+  private trackSel!: HTMLSelectElement;
+  private renderSel!: HTMLSelectElement;
+  private qualitySel!: HTMLSelectElement;
   private mirror!: HTMLInputElement;
   private ranges = new Map<string, { input: HTMLInputElement; out: HTMLOutputElement }>();
   private modelSection!: HTMLElement;
@@ -375,6 +378,30 @@ export class UI {
     this.fpsSel = h('select', {});
     for (const f of [15, 24, 30, 60]) this.fpsSel.append(h('option', { value: String(f) }, `${f} fps`));
     this.mirror = h('input', { type: 'checkbox' });
+    this.trackSel = h('select', {});
+    for (const f of [10, 15, 20, 30]) this.trackSel.append(h('option', { value: String(f) }, `${f} fps`));
+    this.renderSel = h('select', {});
+    for (const f of [24, 30, 60]) this.renderSel.append(h('option', { value: String(f) }, `${f} fps`));
+    this.renderSel.append(h('option', { value: '0' }, 'Display refresh'));
+    this.qualitySel = h('select', {});
+    for (const [q, label] of [
+      [0.5, 'Low (0.5x)'],
+      [0.75, 'Medium (0.75x)'],
+      [1, 'Standard (1x)'],
+      [1.5, 'High (1.5x)'],
+      [2, 'Max (2x)'],
+    ] as const)
+      this.qualitySel.append(h('option', { value: String(q) }, label));
+    const perfChange = () => {
+      const g = this.getGlobal();
+      g.trackFps = Number(this.trackSel.value);
+      g.renderFps = Number(this.renderSel.value);
+      g.quality = Number(this.qualitySel.value);
+      this.hd.globalChanged(false);
+    };
+    this.trackSel.addEventListener('change', perfChange);
+    this.renderSel.addEventListener('change', perfChange);
+    this.qualitySel.addEventListener('change', perfChange);
 
     const camChange = () => {
       const g = this.getGlobal();
@@ -400,6 +427,10 @@ export class UI {
       field('Resolution', this.resSel),
       field('Frame rate', this.fpsSel),
       field('Mirror', this.mirror),
+      h('h3', {}, 'Performance'),
+      field('Tracking rate', this.trackSel),
+      field('Render rate', this.renderSel),
+      field('Render quality', this.qualitySel),
       h('h3', {}, 'Tracking'),
     );
     for (const r of RANGES) {
@@ -479,6 +510,9 @@ export class UI {
     this.fpsSel.value = String(g.camera.fps);
     this.camSel.value = g.camera.deviceId;
     this.mirror.checked = g.mirror;
+    this.trackSel.value = String(g.trackFps);
+    this.renderSel.value = String(g.renderFps);
+    this.qualitySel.value = String(g.quality);
     for (const r of RANGES) {
       const c = this.ranges.get(r.key)!;
       c.input.value = String(g[r.key]);
@@ -505,10 +539,22 @@ export class UI {
     if (this.camSel.value !== g.camera.deviceId) this.camSel.value = '';
   }
 
+  private trackerText = 'Tracking: not running';
+  private renderFps = 0;
+
   setTrackerStatus(s: { running: boolean; delegate: string; fps: number }): void {
-    this.trackerLine.textContent = s.running
-      ? `Tracking: ${s.delegate} · ${s.fps.toFixed(0)} fps`
-      : 'Tracking: not running';
+    this.trackerText = s.running ? `Tracking: ${s.delegate} · ${s.fps.toFixed(0)} fps` : 'Tracking: not running';
+    this.updateTrackerLine();
+  }
+
+  setRenderFps(fps: number): void {
+    if (Math.round(fps) === Math.round(this.renderFps)) return;
+    this.renderFps = fps;
+    this.updateTrackerLine();
+  }
+
+  private updateTrackerLine(): void {
+    this.trackerLine.textContent = `${this.trackerText} · render ${this.renderFps.toFixed(0)} fps`;
   }
 
   // ---------- transient overlays ----------
