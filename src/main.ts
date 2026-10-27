@@ -188,7 +188,13 @@ let persistTimer = 0;
 function describeMode(): string {
   if (!rig) return '';
   const i = rig.info;
-  const bits = [`Detected: ${i.detectedMode}`, i.vrm ? 'VRM' : '', i.perfectSync ? 'Perfect Sync' : '', i.morphTargets ? `${i.morphTargets} ARKit morphs` : 'no ARKit morphs'];
+  const bits = [
+    `Detected: ${i.detectedMode}`,
+    i.vrm ? 'VRM' : '',
+    i.perfectSync ? 'Perfect Sync' : '',
+    i.morphTargets ? `${i.morphTargets} ARKit morphs` : 'no ARKit morphs',
+    i.faceParts.length ? `face parts: ${i.faceParts.join(', ')}` : i.vrm ? '' : 'no eye/jaw/mouth nodes found',
+  ];
   if (rig.mode === 'avatar' && i.detectedMode === 'rigid') bits.push('no head bone found, so nothing will move');
   return bits.filter(Boolean).join(' · ');
 }

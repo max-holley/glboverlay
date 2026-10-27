@@ -14,7 +14,11 @@ Target: **desktop Chrome**. No mobile support.
 - Blendshape mapping, in priority order:
   1. Morph targets named with ARKit-52 names (Ready Player Me, Perfect Sync VRMs) map directly.
   2. VRM expressions (`blink`, `blinkLeft/Right`, `aa ih ou ee oh`, `happy`, ...) are derived from the ARKit values.
-  3. If there are no morphs but a jaw bone exists, the jaw rotates from `jawOpen`.
+  3. If there are no morphs, eye / jaw / mouth parts found by node name (bones or plain mesh nodes such as
+     `Eye.L`, `LeftEye`, `Eyes`, `Jaw`, `Mouth`) are driven directly, in both modes: eyes turn with your gaze and
+     squash to blink, a jaw rotates open, a mouth mesh stretches open and widens with a smile. The detected parts
+     are listed under Settings > Current model.
+- Face tracking runs in a Web Worker so inference never blocks rendering (main-thread fallback if workers fail).
 - One Euro filtering of pose and blendshapes; face-lost handling (hold briefly, then ease to neutral).
 - Multiple models stored in IndexedDB with thumbnails, rename/delete, per-model calibration, storage usage and `navigator.storage.persist()`.
 - Draco, Meshopt and KTX2 compressed glTF supported. Decoders and the MediaPipe WASM + model are self-hosted: no CDN at runtime.

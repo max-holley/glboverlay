@@ -1,5 +1,7 @@
-import { FaceLandmarker, FilesetResolver, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
+import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { Matrix4, Quaternion, Vector3 } from 'three';
+import type { WorkerRequest, WorkerResponse } from './detect.worker';
+import type { FaceFrame } from './landmarker';
 import { ARKIT_COUNT, ARKIT_INDEX } from './arkit';
 import { OneEuro } from './filters';
 import type { CameraSettings } from './settings';
@@ -48,7 +50,6 @@ export class PoseProcessor {
   private rawP = new Vector3();
   private rawQ = new Quaternion();
   private lastT = -1e9;
-  private catIndex = new Map<string, number>();
 
   constructor() {
     this.setSmoothing(0.5);
@@ -66,15 +67,11 @@ export class PoseProcessor {
     });
   }
 
-  process(result: FaceLandmarkerResult, t: number): boolean {
-    const mat = result.facialTransformationMatrixes?.[0];
-    const cats = result.faceBlendshapes?.[0]?.categories;
-    if (!mat || !cats) return false;
-
+  process(f: FaceFrame, t: number): boolean {
     if (t - this.lastT > 0.5) this.resetFilters();
     this.lastT = t;
 
-    const d = mat.data;
+    const d = f.matrix;
     this.m.fromArray(d);
     // Column-major has a zero bottom row in the rotation part; row-major puts the translation there.
     if (Math.abs(d[12]) + Math.abs(d[13]) + Math.abs(d[14]) < 1e-6 && Math.abs(d[3]) + Math.abs(d[7]) + Math.abs(d[11]) > 1e-6) {
@@ -94,16 +91,7 @@ export class PoseProcessor {
       )
       .normalize();
 
-    if (this.catIndex.size === 0) {
-      for (const c of cats) {
-        const i = ARKIT_INDEX.get(c.categoryName);
-        if (i !== undefined) this.catIndex.set(c.categoryName, i);
-      }
-    }
-    for (let i = 0; i < cats.length; i++) {
-      const idx = this.catIndex.get(cats[i].categoryName);
-      if (idx !== undefined) st.blends[idx] = this.fb[idx].filter(cats[i].score, t);
-    }
+    for (let i = 0; i < ARKIT_COUNT; i++) st.blends[i] = this.fb[i].filter(f.blends[i], t);
     st.valid = true;
     st.time = t;
     return true;
@@ -131,7 +119,11 @@ export class Tracker {
   onError: ((e: TrackerError) => void) | null = null;
   onDevices: (() => void) | null = null;
 
+  /** Inference runs here when the worker is available; `landmarker` is the main-thread fallback. */
+  private worker: Worker | null = null;
   private landmarker: FaceLandmarker | null = null;
+  private toFrame: ((r: ReturnType<FaceLandmarker['detectForVideo']>) => FaceFrame | null) | null = null;
+  private busy = false;
   private delegate = '';
   private stream: MediaStream | null = null;
   private running = false;
@@ -146,27 +138,81 @@ export class Tracker {
   }
 
   private async ensureLandmarker(): Promise<void> {
-    if (this.landmarker) return;
-    const fileset = await FilesetResolver.forVisionTasks(BASE + 'mediapipe/wasm');
-    const make = (delegate: 'GPU' | 'CPU') =>
-      FaceLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: BASE + 'mediapipe/face_landmarker.task', delegate },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: true,
-      });
+    if (this.worker || this.landmarker) return;
+    const wasmBase = BASE + 'mediapipe/wasm';
+    const modelUrl = BASE + 'mediapipe/face_landmarker.task';
     try {
-      this.landmarker = await make('GPU');
-      this.delegate = 'GPU';
+      const { worker, delegate } = await this.startWorker(wasmBase, modelUrl);
+      this.worker = worker;
+      this.delegate = `${delegate}, worker`;
+      return;
     } catch (e) {
-      console.warn('GPU delegate failed, falling back to CPU', e);
+      console.warn('Tracking worker unavailable, running on the main thread', e);
+    }
+    try {
+      const lm = await import('./landmarker');
+      const r = await lm.createLandmarker(wasmBase, modelUrl, false);
+      this.landmarker = r.landmarker;
+      this.toFrame = lm.toFrame;
+      this.delegate = r.delegate;
+    } catch (e) {
+      throw new TrackerError('model', `Could not start face tracking: ${(e as Error).message}`);
+    }
+  }
+
+  private startWorker(wasmBase: string, modelUrl: string): Promise<{ worker: Worker; delegate: string }> {
+    return new Promise((resolve, reject) => {
+      let worker: Worker;
       try {
-        this.landmarker = await make('CPU');
-        this.delegate = 'CPU';
-      } catch (e2) {
-        throw new TrackerError('model', `Could not start face tracking: ${(e2 as Error).message}`);
+        worker = new Worker(new URL('./detect.worker.ts', import.meta.url), { type: 'module' });
+      } catch (e) {
+        reject(e);
+        return;
       }
+      const fail = (err: unknown) => {
+        worker.terminate();
+        reject(err);
+      };
+      const timer = window.setTimeout(() => fail(new Error('worker init timed out')), 30000);
+      worker.onerror = (e) => {
+        window.clearTimeout(timer);
+        fail(new Error(e.message || 'worker failed to load'));
+      };
+      worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
+        const msg = e.data;
+        if (msg.type === 'error') {
+          window.clearTimeout(timer);
+          fail(new Error(msg.message));
+        } else if (msg.type === 'ready') {
+          window.clearTimeout(timer);
+          worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
+          worker.onerror = (ev) => {
+            console.warn('tracking worker error', ev.message);
+            this.busy = false;
+          };
+          resolve({ worker, delegate: msg.delegate });
+        }
+      };
+      worker.postMessage({ type: 'init', wasmBase, modelUrl } satisfies WorkerRequest);
+    });
+  }
+
+  private onWorkerMessage(msg: WorkerResponse): void {
+    if (msg.type !== 'result') return;
+    this.busy = false;
+    if (!this.running) return;
+    this.handleFrame(msg.frame, msg.t);
+  }
+
+  private handleFrame(frame: FaceFrame | null, t: number): void {
+    if (frame) this.processor.process(frame, t / 1000);
+    this.frames++;
+    const now = performance.now();
+    if (now - this.fpsT >= 1000) {
+      this.fps = (this.frames * 1000) / (now - this.fpsT);
+      this.frames = 0;
+      this.fpsT = now;
+      this.emit();
     }
   }
 
@@ -264,20 +310,35 @@ export class Tracker {
     const v = this.video;
     const step = () => {
       if (gen !== this.gen || !this.running) return;
-      if (v.currentTime !== this.lastVideoTime && v.readyState >= 2) {
+      // Drop camera frames while the worker is still busy, so latency never builds up.
+      if (!this.busy && v.currentTime !== this.lastVideoTime && v.readyState >= 2) {
         this.lastVideoTime = v.currentTime;
         const t = performance.now();
-        try {
-          this.processor.process(this.landmarker!.detectForVideo(v, t), t / 1000);
-        } catch (e) {
-          console.warn('detect failed', e);
-        }
-        this.frames++;
-        if (t - this.fpsT >= 1000) {
-          this.fps = (this.frames * 1000) / (t - this.fpsT);
-          this.frames = 0;
-          this.fpsT = t;
-          this.emit();
+        if (this.worker) {
+          const worker = this.worker;
+          this.busy = true;
+          createImageBitmap(v).then(
+            (image) => {
+              if (gen !== this.gen) {
+                image.close();
+                this.busy = false;
+                return;
+              }
+              worker.postMessage({ type: 'frame', image, t } satisfies WorkerRequest, [image]);
+            },
+            (e) => {
+              console.warn('frame capture failed', e);
+              this.busy = false;
+            },
+          );
+        } else {
+          let frame: FaceFrame | null = null;
+          try {
+            frame = this.toFrame!(this.landmarker!.detectForVideo(v, t));
+          } catch (e) {
+            console.warn('detect failed', e);
+          }
+          this.handleFrame(frame, t);
         }
       }
       schedule();

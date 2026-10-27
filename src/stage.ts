@@ -17,6 +17,12 @@ import type { LoadedModel } from './loader';
 import type { ModelSettings } from './settings';
 
 const FOV = 30;
+/** Cap on rendered pixels: full-window MSAA at 2x DPR on a 4K screen costs far more than it shows in OBS. */
+const MAX_PIXELS = 2560 * 1440;
+
+function pixelRatio(w: number, h: number): number {
+  return Math.max(0.5, Math.min(window.devicePixelRatio, 2, Math.sqrt(MAX_PIXELS / (w * h))));
+}
 
 /** Renderer, lights, camera and the transform hierarchy that holds the current model. */
 export class Stage {
@@ -49,7 +55,6 @@ export class Stage {
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
     this.renderer.setClearColor(0x000000, 0);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     const pmrem = new PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -74,7 +79,7 @@ export class Stage {
   resize(): void {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(pixelRatio(w, h));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.updateCamera();
